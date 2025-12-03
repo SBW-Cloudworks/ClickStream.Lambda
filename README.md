@@ -51,6 +51,7 @@ Compress-Archive -Path index.mjs -DestinationPath lambda.zip -Force
 1. Tab: **Code**
 2. Box: **Runtime settings** 
 3. Field **Handler** = `index.handler`
+![alt text](img/code.png)
 
 ## 4. Set environment variables
 
@@ -62,12 +63,14 @@ Compress-Archive -Path index.mjs -DestinationPath lambda.zip -Force
    * **Value:** `<your-raw-clickstream-s3-bucket>`
 
 Save changes.
-
 ## 5. Add S3 permission to execution role
 
 1. Open: **Configuration → Permissions**
 2. Click the IAM Role link (e.g., `clickstream-lambda-ingest-role-xxxxx`)
-3. In IAM: **Add inline policy**
+3. In IAM: 
+   - Box: **Permissions policies**
+   - Dropdown menu: **Add permissions**
+   - Choose: **Create inline policy**
 4. Choose **JSON** and paste:
 
 ```json
@@ -93,7 +96,10 @@ Save changes.
   ]
 }
 ```
-
+| | |
+|---|---|
+| ![env1](img/environmentVariables1.png) | ![env2](img/environmentVariables2.png) |
+| ![env3](img/environmentVariables3.png) | ![env4](img/environmentVariables4.png) |
 5. Replace `<RAW_BUCKET_NAME>`
 6. Click **Review policy → Save**
 
