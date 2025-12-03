@@ -18,11 +18,14 @@ export const handler = async (event = {}) => {
       throw new Error("RAW_BUCKET_NAME env var is required");
     }
 
-    const { requestContext = {}, headers = {} } = event;
+    const { requestContext = {}, headers = {}, routeKey } = event;
     const http = requestContext.http || {};
 
-    if (http.method !== "POST" || http.path !== "/clickstream") {
-      throw new Error(`Unsupported route: ${http.method || "?"} ${http.path || "?"}`);
+    if (routeKey && routeKey !== "POST /clickstream") {
+      throw new Error(`Unsupported route: ${routeKey}`);
+    }
+    if (!routeKey && http.method && http.method !== "POST") {
+      throw new Error(`Unsupported method: ${http.method}`);
     }
 
     if (!event.body) {
@@ -35,6 +38,8 @@ export const handler = async (event = {}) => {
     } catch (parseErr) {
       throw new Error("Request body is not valid JSON");
     }
+
+    console.log("Sample eventName:", payload?.eventName, "userId:", payload?.userId);
 
     const enriched = {
       ...payload,
@@ -77,10 +82,24 @@ export const handler = async (event = {}) => {
   } catch (err) {
     console.error("Error ingesting clickstream event", err);
 
+    const clientErrorPrefixes = [
+      "Missing request body",
+      "Request body is not valid JSON",
+      "Unsupported route:",
+      "Unsupported method:",
+    ];
+
+    const isClientError =
+      typeof err?.message === "string" &&
+      clientErrorPrefixes.some((prefix) => err.message.startsWith(prefix));
+
     return {
-      statusCode: 500,
+      statusCode: isClientError ? 400 : 500,
       headers: corsHeaders,
-      body: JSON.stringify({ success: false, message: "Internal error" }),
+      body: JSON.stringify({
+        success: false,
+        message: isClientError ? err.message : "Internal error",
+      }),
     };
   }
 };
