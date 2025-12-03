@@ -1,24 +1,41 @@
-![sbwCloudworks](swbCloudworksBanner.png)
+﻿![sbwCloudworks](swbCloudworksBanner.png)
 ![ClickStreamDiagramV10](ClickStreamDiagramV10.png)
 ### Clickstream Analytics Platform for E-Commerce
 # Lambda Ingest (HTTP API -> S3 Raw)
-
-**Overall**  
 * Runtime: Node.js 20.x, arch x86_64  
 * Entry point: `ClickStream.Lambda.Ingest/index.mjs` exporting `handler` (no VPC)  
 * Trigger: API Gateway HTTP API v2 `POST /clickstream`  
 * Writes raw events to S3 with UTC partitions: `events/YYYY/MM/DD/HH/event-<uuid>.json`  
 * Required env: `RAW_BUCKET_NAME` (S3 bucket for raw clickstream data)
 
-**Implementation notes**  
-* Parses `event.body` JSON; rejects missing/invalid JSON; validates route via `routeKey` when provided.  
-* Enriches payload with `_ingest` metadata (receivedAt, sourceIp, userAgent, method, path, requestId, apiId, stage, traceId).  
-* Uses `@aws-sdk/client-s3` `PutObjectCommand` and `crypto.randomUUID()`.  
-* Success: 200 `{ "success": true }`; Client errors (missing/invalid JSON or unsupported route/method): 400 with message; Server errors: 500 `{ "success": false, "message": "Internal error" }`.  
-* CORS headers always set: `Access-Control-Allow-Origin: *`, `Access-Control-Allow-Credentials: true`, `Content-Type: application/json`.  
-* Logs start, target S3 key, and errors (without dumping full payload).
+**Overall**
+- Function name: `clickstream-lambda-ingest`
+- Runtime: `Node.js 20.x`
+- Architecture: `x86_64` (cost-effective, widest compatibility)
 
-**IAM policy (attach to Lambda execution role; replace `<RAW_BUCKET_NAME>`)**
+**Step 2 — Permissions (execution role)**
+- When creating the function, choose **Create a new role with basic Lambda permissions** (CloudWatch Logs only). AWS will create a role like `clickstream-ingest-lambda-role-xxxxx`. S3 access is added later.
+
+**Step 3 — Additional configurations**
+- Do **not** attach the Lambda to a VPC (leave VPC: Not configured). This ingest Lambda must stay outside the VPC to reach S3 without endpoints/NAT.
+- Keep Function URL, Code signing, and KMS encryption disabled (defaults are fine).
+
+**Step 4 — Create the deployment ZIP**
+- From the folder containing `index.mjs` (Windows PowerShell):
+```powershell
+Compress-Archive -Path index.mjs -DestinationPath lambda.zip -Force
+```
+
+**Step 5 — Upload code from repo**
+- After the function is created: Code -> Upload from -> `.zip file` -> upload `lambda.zip`.
+- Update handler in Configuration -> General: `index.handler`.
+
+**Step 6 — Environment variable**
+- Configuration -> Environment variables -> Edit -> add `RAW_BUCKET_NAME=<your raw clickstream bucket>`.
+
+**Step 7 — Add S3 permission to the execution role**
+1. Configuration -> Permissions -> click the execution role link.
+2. **IAM policy** (attach to Lambda execution role; replace `<RAW_BUCKET_NAME>`)
 ```json
 {
   "Version": "2012-10-17",
@@ -42,6 +59,14 @@
   ]
 }
 ```
+
+
+**Step 8 — Test the Lambda**
+1. In the Test tab, use the HTTP API v2 sample event from the **Lambda Ingest (HTTP API -> S3 Raw)** section.
+2. Run the test; confirm a 200 response.
+3. Check the raw S3 bucket for `events/YYYY/MM/DD/HH/event-xxxx.json`.
+
+
 
 **Sample HTTP API v2 test event**
 ```json
@@ -72,7 +97,6 @@
   "isBase64Encoded": false
 }
 ```
-
 ---
 
 ## 🏆 Overview
