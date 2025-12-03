@@ -3,39 +3,73 @@
 ### Clickstream Analytics Platform for E-Commerce
 # Lambda Ingest (HTTP API -> S3 Raw)
 * Runtime: Node.js 20.x, arch x86_64  
-* Entry point: `ClickStream.Lambda.Ingest/index.mjs` exporting `handler` (no VPC)  
+* Entry point: `ClickStream.Lambda.Ingest/index.mjs` exporting `handler`  
 * Trigger: API Gateway HTTP API v2 `POST /clickstream`  
 * Writes raw events to S3 with UTC partitions: `events/YYYY/MM/DD/HH/event-<uuid>.json`  
-* Required env: `RAW_BUCKET_NAME` (S3 bucket for raw clickstream data)
+* Required env: `RAW_BUCKET_NAME`  
 
-**Overall**
-- Function name: `clickstream-lambda-ingest`
-- Runtime: `Node.js 20.x`
-- Architecture: `x86_64` (cost-effective, widest compatibility)
+---
 
-**Step 2 — Permissions (execution role)**
-- When creating the function, choose **Create a new role with basic Lambda permissions** (CloudWatch Logs only). AWS will create a role like `clickstream-ingest-lambda-role-xxxxx`. S3 access is added later.
+## 1. Create Lambda (AWS Console)
 
-**Step 3 — Additional configurations**
-- Do **not** attach the Lambda to a VPC (leave VPC: Not configured). This ingest Lambda must stay outside the VPC to reach S3 without endpoints/NAT.
-- Keep Function URL, Code signing, and KMS encryption disabled (defaults are fine).
+#### Create function
+1. AWS Console → Lambda → **Create function**
+2. **Author from scratch**
+3. **Function name** = `clickstream-lambda-ingest`
+4. **Runtime** = `Node.js 20.x`
+5. **Architecture** = `x86_64`
+6. **Permissions → Execution role**  
+   - Select: **Create a new role with basic Lambda permissions**
+7. Scroll down → **Create function**
 
-**Step 4 — Create the deployment ZIP**
-- From the folder containing `index.mjs` (Windows PowerShell):
+## 2. Upload deployment ZIP from repo
+
+#### Prepare ZIP locally
+Folder structure:
+```
+
+ClickStream.Lambda.Ingest/
+└── index.mjs
+
+```
+
+Create ZIP (Windows PowerShell):
+
 ```powershell
 Compress-Archive -Path index.mjs -DestinationPath lambda.zip -Force
 ```
 
-**Step 5 — Upload code from repo**
-- After the function is created: Code -> Upload from -> `.zip file` -> upload `lambda.zip`.
-- Update handler in Configuration -> General: `index.handler`.
+#### Upload ZIP to Lambda
 
-**Step 6 — Environment variable**
-- Configuration -> Environment variables -> Edit -> add `RAW_BUCKET_NAME=<your raw clickstream bucket>`.
+1. Open function → tab **Code**
+2. Click **Upload from → .zip file**
+3. Choose `lambda.zip`
+4. Save
 
-**Step 7 — Add S3 permission to the execution role**
-1. Configuration -> Permissions -> click the execution role link.
-2. **IAM policy** (attach to Lambda execution role; replace `<RAW_BUCKET_NAME>`)
+## 3. Update Handler
+
+1. Tab: **Code**
+2. Box: **Runtime settings** 
+3. Field **Handler** = `index.handler`
+
+## 4. Set environment variables
+
+1. Open: **Configuration → Environment variables**
+2. Click **Edit**
+3. Add:
+
+   * **Key:** `RAW_BUCKET_NAME`
+   * **Value:** `<your-raw-clickstream-s3-bucket>`
+
+Save changes.
+
+## 5. Add S3 permission to execution role
+
+1. Open: **Configuration → Permissions**
+2. Click the IAM Role link (e.g., `clickstream-lambda-ingest-role-xxxxx`)
+3. In IAM: **Add inline policy**
+4. Choose **JSON** and paste:
+
 ```json
 {
   "Version": "2012-10-17",
@@ -60,15 +94,24 @@ Compress-Archive -Path index.mjs -DestinationPath lambda.zip -Force
 }
 ```
 
+5. Replace `<RAW_BUCKET_NAME>`
+6. Click **Review policy → Save**
 
-**Step 8 — Test the Lambda**
-1. In the Test tab, use the HTTP API v2 sample event from the **Lambda Ingest (HTTP API -> S3 Raw)** section.
-2. Run the test; confirm a 200 response.
-3. Check the raw S3 bucket for `events/YYYY/MM/DD/HH/event-xxxx.json`.
+## 6. (Important) Confirm Lambda stays *outside* VPC
 
+1. Open: **Configuration → VPC**
+2. Ensure value is:
 
+   * **VPC:** `Not configured`
 
-**Sample HTTP API v2 test event**
+(*This is required so the ingest Lambda can write to S3 without VPC endpoints or NAT Gateway.*)
+
+## 7. Test the Lambda (HTTP API v2 event)
+
+1. Open: **Test** tab
+2. Click **Create new test event**
+3. Paste this sample input:
+
 ```json
 {
   "version": "2.0",
@@ -97,23 +140,16 @@ Compress-Archive -Path index.mjs -DestinationPath lambda.zip -Force
   "isBase64Encoded": false
 }
 ```
----
 
-## 🏆 Overview
+4. Click **Test**
+5. Expect:
 
-This project implements a **Batch-Based Clickstream Analytics Platform** for an e-commerce website selling computer products.
+   * Response: `200 OK`
+   * S3 bucket contains:
 
-The system collects clickstream events from the frontend, stores raw JSON data in **Amazon S3**, processes events via scheduled ETL (AWS Lambda + EventBridge), and loads analytical data into a dedicated **PostgreSQL Data Warehouse** on EC2.
-
-Analytics dashboards are built using **R Shiny**, deployed in a private subnet and directly querying the Data Warehouse.
-
-The platform is engineered with:
-
-- Clear separation between **OLTP vs Analytics** workloads  
-- Private-only analytical backend (no public DW access)  
-- Cost-efficient, scalable AWS serverless components  
-- Minimal moving parts for reliability and simplicity  
-
+     ```
+     events/YYYY/MM/DD/HH/event-xxxx.json
+     ```
 ---
 
 # 🏗️ Architecture Summary
