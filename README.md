@@ -1,9 +1,77 @@
 ![sbwCloudworks](swbCloudworksBanner.png)
-
-## Technical Architecture Diagram
 ![ClickStreamDiagramV10](ClickStreamDiagramV10.png)
-# 📊 Clickstream Analytics Platform for E-Commerce  
-Batch-based ETL • AWS Serverless • Data Warehouse • R Shiny Analytics
+### Clickstream Analytics Platform for E-Commerce
+# Lambda Ingest (HTTP API -> S3 Raw)
+
+**Overall**  
+* Runtime: Node.js 20.x, arch x86_64  
+* Entry point: `ClickStream.Lambda.Ingest/index.mjs` exporting `handler` (no VPC)  
+* Trigger: API Gateway HTTP API v2 `POST /clickstream`  
+* Writes raw events to S3 with UTC partitions: `events/YYYY/MM/DD/HH/event-<uuid>.json`  
+* Required env: `RAW_BUCKET_NAME` (S3 bucket for raw clickstream data)
+
+**Implementation notes**  
+* Parses `event.body` JSON; rejects missing/invalid JSON; validates route via `routeKey` when provided.  
+* Enriches payload with `_ingest` metadata (receivedAt, sourceIp, userAgent, method, path, requestId, apiId, stage, traceId).  
+* Uses `@aws-sdk/client-s3` `PutObjectCommand` and `crypto.randomUUID()`.  
+* Success: 200 `{ "success": true }`; Client errors (missing/invalid JSON or unsupported route/method): 400 with message; Server errors: 500 `{ "success": false, "message": "Internal error" }`.  
+* CORS headers always set: `Access-Control-Allow-Origin: *`, `Access-Control-Allow-Credentials: true`, `Content-Type: application/json`.  
+* Logs start, target S3 key, and errors (without dumping full payload).
+
+**IAM policy (attach to Lambda execution role; replace `<RAW_BUCKET_NAME>`)**
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:*:*:*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject"
+      ],
+      "Resource": "arn:aws:s3:::<RAW_BUCKET_NAME>/events/*"
+    }
+  ]
+}
+```
+
+**Sample HTTP API v2 test event**
+```json
+{
+  "version": "2.0",
+  "routeKey": "POST /clickstream",
+  "rawPath": "/clickstream",
+  "rawQueryString": "",
+  "headers": {
+    "content-type": "application/json",
+    "x-amzn-trace-id": "Root=1-67891233-abcdef012345678912345678",
+    "user-agent": "Mozilla/5.0"
+  },
+  "requestContext": {
+    "accountId": "123456789012",
+    "apiId": "abc123",
+    "requestId": "test-request-id",
+    "stage": "$default",
+    "http": {
+      "method": "POST",
+      "path": "/clickstream",
+      "protocol": "HTTP/1.1",
+      "sourceIp": "203.0.113.1",
+      "userAgent": "Mozilla/5.0"
+    }
+  },
+  "body": "{\"eventName\":\"view_product\",\"userId\":\"u-123\",\"sessionId\":\"s-abc\",\"pageUrl\":\"https://example.com/product/sku-1\",\"referrer\":\"https://google.com\",\"userLoginState\":\"guest\",\"product\":{\"id\":\"sku-1\",\"name\":\"Laptop\",\"category\":\"Computers\",\"brand\":\"SBW\",\"price\":1200,\"discountPrice\":999}}",
+  "isBase64Encoded": false
+}
+```
 
 ---
 
@@ -389,41 +457,3 @@ The numbered flow in the architecture diagram illustrates:
 
 * **R Shiny Server** — Analytics dashboards
 * **Custom ETL logic** — Lambda ETL transforming S3 JSON → SQL tables
-
----
-
-# 🚀 Deployment Notes
-
-* **No NAT Gateway** is required (S3 access via VPC Gateway Endpoint)
-* All analytical components (DW + Shiny + ETL Lambda) sit in **private subnets**
-* Only the OLTP EC2 instance is public, to support direct Prisma connections from Amplify
-* For a production-hardening step, OLTP could be migrated to:
-
-  * **Amazon RDS PostgreSQL in private subnets**
-  * Combined with a dedicated backend API layer
-
----
-
-# 📚 Local Development (LocalStack Notes)
-
-When using LocalStack, additional internal/system buckets may be created automatically.
-However, the project **logically depends on only two S3 buckets**:
-
-* Amplify Assets Bucket
-* Raw Clickstream Bucket
-
-Some services such as Amplify Hosting, Cognito UI flows, and full VPC networking may be only partially supported in LocalStack and require integration testing in real AWS.
-
----
-
-# 📈 Future Improvements
-
-* Migrate the Data Warehouse to **Amazon Redshift Serverless**
-* Add a **real-time streaming pipeline** using Amazon Kinesis + Lambda
-* Enhance ETL to support:
-
-  * Sessionization
-  * Attribution models
-  * User segmentation
-* Implement data quality checks & anomaly detection for events
-* Introduce a dedicated backend API service for OLTP to remove direct DB exposure
