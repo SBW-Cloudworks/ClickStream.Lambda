@@ -66,3 +66,10 @@
 - Should click `element` metadata be stored (JSON column) or dropped?
 - Definitive enum set for event_name/user_login_state/identity_source in DW.
 - Price/discount semantics (integer cents vs decimal; absolute vs percent).
+
+## VPC / Network Constraints
+- Lambda ETL runs in a private subnet with no internet/NAT. Only allowed egress: S3 via Gateway Endpoint, PostgreSQL via VPC (private IP/SG).
+- Package all dependencies with the Lambda (pg, aws-sdk v3); no runtime downloads.
+- Use DW private endpoint/host + SG rules to allow Lambda SG -> PG port; no public DNS expected.
+- If secrets come from env vars (no SSM/Secrets Manager endpoints), keep them bundled; if using SSM/Secrets Manager, ensure VPC endpoints are provisioned.
+- Keep PG connection pool minimal (e.g., 1–2) and close after batch to avoid lingering connections.
