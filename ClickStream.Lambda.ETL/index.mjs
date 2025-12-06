@@ -135,6 +135,31 @@ const buildInsert = (rows, table) => {
   return { sql, values };
 };
 
+// [8] Ensure target table exists with expected columns
+const ensureTableExists = async (pgClient, table) => {
+  const createSql = `
+    CREATE TABLE IF NOT EXISTS ${table} (
+      event_id UUID PRIMARY KEY,
+      event_timestamp TIMESTAMPTZ NOT NULL,
+      event_name TEXT NOT NULL,
+      user_id TEXT,
+      user_login_state TEXT,
+      identity_source TEXT,
+      client_id TEXT,
+      session_id TEXT,
+      is_first_visit BOOLEAN,
+      context_product_id TEXT,
+      context_product_name TEXT,
+      context_product_category TEXT,
+      context_product_brand TEXT,
+      context_product_price BIGINT,
+      context_product_discount_price BIGINT,
+      context_product_url_path TEXT
+    )
+  `;
+  await pgClient.query(createSql);
+};
+
 // [7] Handler: orchestrates S3 -> transform -> PG insert for previous UTC hour
 //     Yeu cau: env RAW_BUCKET_NAME + PG env; Lambda chay trong VPC private, khong internet
 export const handler = async () => {
@@ -206,10 +231,21 @@ export const handler = async () => {
   }
 
   // Kết nối PG (private IP), pool tối đa 1 để tránh giữ connection
+  console.log("Connecting to PG", {
+    host: process.env.DW_PG_HOST,
+    port: process.env.DW_PG_PORT || 5432,
+    database: process.env.DW_PG_DATABASE,
+    user: process.env.DW_PG_USER ? "***" : "not set",
+  });
   await pgClient.connect();
+  console.log("Connected to PG");
   let inserted = 0;
 
   try {
+    // Đảm bảo bảng tồn tại trước khi insert
+    await ensureTableExists(pgClient, table);
+    console.log("Ensured table exists", table);
+
     for (let i = 0; i < events.length; i += batchSize) { // insert in batches
       const batch = events.slice(i, i + batchSize);
       const { sql, values } = buildInsert(batch, table);

@@ -39,3 +39,4 @@ Lambda ETL chạy mỗi giờ (EventBridge trigger), đọc các file JSON click
 - [5] Map raw JSON -> row DW (ưu tiên `_ingest.receivedAt`, sinh UUID nếu thiếu).
 - [6] Build INSERT batch + ON CONFLICT DO NOTHING.
 - [7] Handler orchestration (đòi hỏi env + VPC private, không internet).
+- [8] Ensure bảng đích tồn tại (CREATE TABLE IF NOT EXISTS) trước khi insert.
