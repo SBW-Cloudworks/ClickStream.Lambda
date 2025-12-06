@@ -1,7 +1,7 @@
 // [0] ClickStream Lambda ETL
-//   1) Read raw clickstream JSON from S3 (previous UTC hour partition)
-//   2) Transform to DW shape (coerce types, fill defaults)
-//   3) Insert into PostgreSQL DW (ON CONFLICT DO NOTHING via event_id)
+//   1) Read raw clickstream JSON from S3 (previous UTC hour by default)
+//   2) Allow override via test payload: overridePrefix, targetUtcHour, targetUtcDate, hoursBack, scope=hour|day
+//   3) Transform to DW shape and insert into PostgreSQL
 import { S3Client, ListObjectsV2Command, GetObjectCommand } from "@aws-sdk/client-s3";
 import { Client as PgClient } from "pg";
 import { randomUUID } from "crypto";
@@ -19,12 +19,8 @@ const streamToString = async (stream) => {
   return Buffer.concat(chunks).toString("utf-8");
 };
 
-// [2] Build prefix for previous UTC hour: events/YYYY/MM/DD/HH/
-//     EventBridge nen chay phut 5 moi gio de folder gio truoc da du file
-const previousUtcHourPrefix = (now = new Date()) => {
-  const dt = new Date(now);
-  dt.setUTCMinutes(0, 0, 0);
-  dt.setUTCHours(dt.getUTCHours() - 1);
+// [2] Build prefix for a given UTC datetime
+const prefixFromDate = (dt) => {
   const year = dt.getUTCFullYear().toString();
   const month = String(dt.getUTCMonth() + 1).padStart(2, "0");
   const day = String(dt.getUTCDate()).padStart(2, "0");
@@ -32,7 +28,39 @@ const previousUtcHourPrefix = (now = new Date()) => {
   return { year, month, day, hour, prefix: `events/${year}/${month}/${day}/${hour}/` };
 };
 
-// [3] Coerce numeric fields safely
+// [3] Decide prefix based on override payload or default (previous UTC hour)
+const resolvePrefix = (event) => {
+  // Highest priority: explicit overridePrefix
+  if (event?.overridePrefix) {
+    return { prefix: event.overridePrefix, reason: "overridePrefix" };
+  }
+  // Next: targetUtcHour ISO string or epoch (hour scope)
+  if (event?.targetUtcHour) {
+    const t = new Date(event.targetUtcHour);
+    const { prefix } = prefixFromDate(t);
+    return { prefix, reason: "targetUtcHour" };
+  }
+  // Next: targetUtcDate ISO string or epoch (day scope)
+  if (event?.targetUtcDate) {
+    const t = new Date(event.targetUtcDate);
+    const { year, month, day } = prefixFromDate(t);
+    return { prefix: `events/${year}/${month}/${day}/`, reason: "targetUtcDate" };
+  }
+  // Next: hoursBack (integer, default 1)
+  const hoursBack = Number.isFinite(Number(event?.hoursBack)) ? Number(event.hoursBack) : 1;
+  const now = new Date();
+  const base = new Date(now);
+  base.setUTCMinutes(0, 0, 0);
+  base.setUTCHours(base.getUTCHours() - hoursBack);
+  const { year, month, day, hour, prefix } = prefixFromDate(base);
+  // scope=day to scan whole day of the computed date
+  if (event?.scope === "day") {
+    return { prefix: `events/${year}/${month}/${day}/`, reason: `hoursBack=${hoursBack},scope=day` };
+  }
+  return { prefix, reason: `hoursBack=${hoursBack},scope=hour` };
+};
+
+// [4] Coerce numeric fields safely
 const coerceNumber = (value) => {
   if (value === undefined || value === null) return null;
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
@@ -40,20 +68,23 @@ const coerceNumber = (value) => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
-// [4] Protect against unsafe table names
+// [5] Protect against unsafe table names
 const safeTableName = (name, fallback = "clickstream_events") => {
   const regex = /^[A-Za-z0-9_]+$/;
   return regex.test(name || "") ? name : fallback;
 };
 
-// [5] Map raw JSON (ingest payload + metadata) to DW row shape
-//     Uu tien du lieu ingest (receivedAt) cho event_timestamp; sinh UUID neu thieu
+// [6] Map raw JSON (ingest payload + metadata) to DW row shape
 const parseEvent = (raw, lastModified) => {
   if (!raw || typeof raw !== "object") return null;
 
   const product = raw.product || raw.context_product || {};
   const ingestTs = raw._ingest?.receivedAt ? new Date(raw._ingest.receivedAt) : null;
-  const payloadTs = raw.event_timestamp ? new Date(raw.event_timestamp) : raw.eventTimestamp ? new Date(raw.eventTimestamp) : null;
+  const payloadTs = raw.event_timestamp
+    ? new Date(raw.event_timestamp)
+    : raw.eventTimestamp
+    ? new Date(raw.eventTimestamp)
+    : null;
   const fallbackTs = lastModified ? new Date(lastModified) : new Date();
 
   const eventTimestamp = ingestTs || payloadTs || fallbackTs;
@@ -80,7 +111,7 @@ const parseEvent = (raw, lastModified) => {
   return event;
 };
 
-// [6] Build parameterized INSERT for batch rows with ON CONFLICT DO NOTHING
+// [7] Build parameterized INSERT for batch rows with ON CONFLICT DO NOTHING
 const buildInsert = (rows, table) => {
   const cols = [
     "event_id",
@@ -160,9 +191,8 @@ const ensureTableExists = async (pgClient, table) => {
   await pgClient.query(createSql);
 };
 
-// [7] Handler: orchestrates S3 -> transform -> PG insert for previous UTC hour
-//     Yeu cau: env RAW_BUCKET_NAME + PG env; Lambda chay trong VPC private, khong internet
-export const handler = async () => {
+// [9] Handler: orchestrates S3 -> transform -> PG insert, with prefix override support
+export const handler = async (event = {}) => {
   const bucket = process.env.RAW_BUCKET_NAME;
   if (!bucket) {
     throw new Error("RAW_BUCKET_NAME env var is required");
@@ -181,8 +211,8 @@ export const handler = async () => {
     max: 1,
   });
 
-  const { prefix } = previousUtcHourPrefix(new Date()); // process previous hour folder
-  console.log("ETL processing prefix", prefix);
+  const { prefix, reason } = resolvePrefix(event);
+  console.log("ETL processing prefix", prefix, "reason", reason);
 
   const listResp = await s3.send(
     new ListObjectsV2Command({
@@ -191,21 +221,24 @@ export const handler = async () => {
     })
   );
 
-  const keys = (listResp.Contents || []).map((obj) => ({
-    key: obj.Key,
-    lastModified: obj.LastModified,
-  })).filter((k) => !!k.key);
-
-  if (keys.length === 0) {
-    console.log("No objects found for prefix", prefix);
-    return { processed: 0, inserted: 0 };
-  }
+  const keys = (listResp.Contents || [])
+    .map((obj) => ({
+      key: obj.Key,
+      lastModified: obj.LastModified,
+    }))
+    .filter((k) => !!k.key);
+  console.log("S3 list result", {
+    prefix,
+    reason,
+    keyCount: keys.length,
+  });
 
   const events = [];
 
-  // Vòng lặp đọc từng object S3, parse JSON, map thành event
-  for (const { key, lastModified } of keys) { // fetch & parse each object
+  // Fetch & parse each object
+  for (const { key, lastModified } of keys) {
     try {
+      console.log("Fetching object", key);
       const obj = await s3.send(
         new GetObjectCommand({
           Bucket: bucket,
@@ -225,12 +258,8 @@ export const handler = async () => {
     }
   }
 
-  if (events.length === 0) {
-    console.log("No valid events to insert");
-    return { processed: keys.length, inserted: 0 };
-  }
+  console.log("Parsed events count", events.length);
 
-  // Kết nối PG (private IP), pool tối đa 1 để tránh giữ connection
   console.log("Connecting to PG", {
     host: process.env.DW_PG_HOST,
     port: process.env.DW_PG_PORT || 5432,
@@ -242,13 +271,19 @@ export const handler = async () => {
   let inserted = 0;
 
   try {
-    // Đảm bảo bảng tồn tại trước khi insert
+    // Ensure table exists
     await ensureTableExists(pgClient, table);
     console.log("Ensured table exists", table);
 
-    for (let i = 0; i < events.length; i += batchSize) { // insert in batches
+    if (events.length === 0) {
+      console.log("No valid events to insert");
+      return { processed: keys.length, inserted: 0 };
+    }
+
+    for (let i = 0; i < events.length; i += batchSize) {
       const batch = events.slice(i, i + batchSize);
       const { sql, values } = buildInsert(batch, table);
+      console.log("Inserting batch", { batchStart: i, batchSize: batch.length });
       await pgClient.query("BEGIN");
       await pgClient.query(sql, values);
       await pgClient.query("COMMIT");
