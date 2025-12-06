@@ -1,0 +1,17 @@
+{
+  "name": "clickstream.lambda.etl",
+  "version": "1.0.0",
+  "description": "Lambda ETL chạy mỗi giờ (EventBridge trigger), đọc các file JSON clickstream ở S3 `events/YYYY/MM/DD/HH/`, transform và insert vào PostgreSQL DW.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.943.0",
+    "pg": "^8.16.3"
+  }
+}
