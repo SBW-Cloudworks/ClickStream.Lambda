@@ -102,7 +102,7 @@ const parseEvent = (raw, lastModified) => {
     context_product_id: product.id ?? product.product_id ?? null,
     context_product_name: product.name ?? product.product_name ?? null,
     context_product_category: product.category ?? product.product_category ?? null,
-    context_product_brand: product.brand ?? product.product_brand ?? null,
+    context_product_brand: product.brand ?? product.brandName ?? product.product_brand ?? null,
     context_product_price: coerceNumber(product.price ?? product.product_price),
     context_product_discount_price: coerceNumber(product.discountPrice ?? product.product_discount_price),
     context_product_url_path: product.urlPath ?? product.product_url_path ?? null,
