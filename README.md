@@ -1,6 +1,7 @@
-﻿![sbwCloudworks](swbCloudworksBanner.png)
-![ClickStreamDiagramV10](ClickStreamDiagramV10.png)
-### Clickstream Analytics Platform for E-Commerce
+﻿![SBWBanner](img/SBW_Banner.png)
+![Diagram](img/ClickStreamDiagramV11.png)
+# Clickstream Analytics Platform for E-Commerce
+
 # Lambda Ingest (HTTP API -> S3 Raw)
 * Runtime: Node.js 20.x, arch x86_64  
 * Entry point: `ClickStream.Lambda.Ingest/index.mjs` exporting `handler`  
@@ -17,7 +18,7 @@
 2. **Author from scratch**
 3. **Function name** = `clickstream-lambda-ingest`
 4. **Runtime** = `Node.js 20.x`
-5. **Architecture** = `x86_64`
+5. **Architecture** = `x86_64`v
 6. **Permissions → Execution role**  
    - Select: **Create a new role with basic Lambda permissions**
 7. Scroll down → **Create function**
@@ -158,6 +159,235 @@ Save changes.
      ```
 ---
 
+# Lambda ETL (S3 → PostgreSQL DW)
+
+* Runtime: Node.js 20.x, arch x86_64  
+* Entry point: `ClickStream.Lambda.ETL/index.mjs` exporting `handler`  
+* Trigger: EventBridge cron `cron(5 * * * ? *)` (runs at minute 5 every hour, processes previous hour)  
+* Actions: Reads raw JSON from S3, transforms and normalizes clickstream events, inserts into PostgreSQL Data Warehouse  
+* Required env:
+  * `RAW_BUCKET_NAME` — S3 bucket containing raw clickstream events
+  * `DW_PG_HOST` — PostgreSQL DW private IP (e.g., `10.0.131.112`)
+  * `DW_PG_PORT` — PostgreSQL port (default `5432`)
+  * `DW_PG_USER` — Database user (e.g., `postgres`)
+  * `DW_PG_PASSWORD` — Database password
+  * `DW_PG_DATABASE` — Database name (e.g., `clickstream_dw`)
+  * `DW_PG_SSL` — Optional, `"true"` to enable TLS (default `false` for internal VPC)
+  * `TARGET_TABLE` — Optional, table name (default `clickstream_events`)
+  * `MAX_RECORDS_PER_BATCH` — Optional, batch size (default `200`)
+* VPC: **Required** — Lambda must run in private subnet with:
+  * S3 Gateway VPC Endpoint for S3 access (no NAT Gateway needed)
+  * Security Group allowing outbound to PostgreSQL DW on port 5432
+* Permissions: S3 read (`s3:GetObject`, `s3:ListBucket`), VPC execution role, CloudWatch Logs write
+
+---
+
+## 1. Create Lambda (AWS Console)
+
+#### Create function
+1. AWS Console → Lambda → **Create function**
+2. **Author from scratch**
+3. **Function name** = `clickstream-lambda-etl`
+4. **Runtime** = `Node.js 20.x`
+5. **Architecture** = `x86_64`
+6. **Permissions → Execution role**  
+   - Select: **Create a new role with basic Lambda permissions**
+7. Scroll down → **Create function**
+
+## 2. Upload deployment ZIP from repo
+
+#### Prepare ZIP locally
+Navigate to ETL folder and install dependencies:
+
+```powershell
+cd ClickStream.Lambda.ETL
+npm install --production
+```
+
+Create ZIP including code and dependencies (Windows PowerShell):
+
+```powershell
+Copy-Item Lambda-ETL.mjs index.mjs
+Compress-Archive -Path index.mjs,package.json,package-lock.json,node_modules -DestinationPath lambda-etl.zip -Force
+Remove-Item index.mjs
+```
+
+#### Upload ZIP to Lambda
+
+1. Open function → tab **Code**
+2. Click **Upload from → .zip file**
+3. Choose `lambda-etl.zip`
+4. Save
+
+## 3. Update Handler
+
+1. Tab: **Code**
+2. Box: **Runtime settings** 
+3. Field **Handler** = `index.handler`
+
+## 4. Set environment variables
+
+1. Open: **Configuration → Environment variables**
+2. Click **Edit**
+3. Add the following variables:
+
+   * **Key:** `RAW_BUCKET_NAME`  
+     **Value:** `<your-raw-clickstream-s3-bucket>`
+   
+   * **Key:** `DW_PG_HOST`  
+     **Value:** `<your-dw-private-ip>` (e.g., `10.0.131.112`)
+   
+   * **Key:** `DW_PG_PORT`  
+     **Value:** `5432`
+   
+   * **Key:** `DW_PG_USER`  
+     **Value:** `postgres`
+   
+   * **Key:** `DW_PG_PASSWORD`  
+     **Value:** `<your-db-password>`
+   
+   * **Key:** `DW_PG_DATABASE`  
+     **Value:** `clickstream_dw`
+   
+   * **Key:** `DW_PG_SSL`  
+     **Value:** `false`
+   
+   * **Key:** `TARGET_TABLE`  
+     **Value:** `clickstream_events`
+   
+   * **Key:** `MAX_RECORDS_PER_BATCH`  
+     **Value:** `100`
+
+4. Save changes.
+
+## 5. Add S3 and VPC permissions to execution role
+
+1. Open: **Configuration → Permissions**
+2. Click the IAM Role link (e.g., `clickstream-lambda-etl-role-xxxxx`)
+3. In IAM: 
+   - Box: **Permissions policies**
+   - Dropdown menu: **Add permissions**
+   - Choose: **Create inline policy**
+4. Choose **JSON** and paste:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:*:*:*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::<RAW_BUCKET_NAME>",
+        "arn:aws:s3:::<RAW_BUCKET_NAME>/events/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateNetworkInterface",
+        "ec2:DescribeNetworkInterfaces",
+        "ec2:DeleteNetworkInterface",
+        "ec2:AssignPrivateIpAddresses",
+        "ec2:UnassignPrivateIpAddresses"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+5. Replace `<RAW_BUCKET_NAME>` with your bucket name
+6. Click **Review policy** → Name it `ETL-S3-VPC-Policy` → **Create policy**
+
+## 6. (Critical) Configure VPC for Lambda
+
+1. Open: **Configuration → VPC**
+2. Click **Edit**
+3. Configure:
+   * **VPC:** Select your VPC (e.g., `10.0.0.0/16`)
+   * **Subnets:** Select **private subnet(s)** (e.g., Private Subnet 2 for ETL)
+   * **Security Groups:** Select security group that allows:
+     - Outbound to S3 Gateway VPC Endpoint
+     - Outbound to PostgreSQL DW Security Group on port 5432
+4. **Save**
+
+**Important Notes:**
+- Lambda **must** be in a private subnet
+- Ensure S3 Gateway VPC Endpoint is configured for the VPC
+- PostgreSQL DW Security Group must allow inbound from Lambda Security Group on port 5432
+- No NAT Gateway is needed (S3 access via VPC Endpoint)
+
+## 7. Configure EventBridge trigger
+
+1. Open: **Configuration → Triggers**
+2. Click **Add trigger**
+3. Select trigger source: **EventBridge (CloudWatch Events)**
+4. Choose **Create a new rule**
+5. Configure rule:
+   * **Rule name:** `etl-hourly-trigger`
+   * **Rule description:** `Triggers ETL Lambda every hour at minute 5`
+   * **Rule type:** Schedule expression
+   * **Schedule expression:** `cron(5 * * * ? *)`
+6. Click **Add**
+
+## 8. Increase Lambda timeout and memory
+
+1. Open: **Configuration → General configuration**
+2. Click **Edit**
+3. Set:
+   * **Memory:** `512 MB` (or `1024 MB` for larger batches)
+   * **Timeout:** `1 min 0 sec` (adjust based on data volume)
+4. **Save**
+
+## 9. Test the Lambda
+
+1. Open: **Test** tab
+2. Click **Create new test event**
+3. **Event name:** `test-etl-previous-hour`
+4. Paste this sample input to process previous hour:
+
+```json
+{
+  "hoursBack": 1
+}
+```
+
+Or to test a specific hour:
+
+```json
+{
+  "targetUtcHour": "2025-12-06T05:00:00Z"
+}
+```
+
+Or to test a specific date prefix:
+
+```json
+{
+  "overridePrefix": "events/2025/12/06/05/"
+}
+```
+
+5. Click **Test**
+6. Expect:
+   * Response: Success with processed/inserted counts in CloudWatch Logs
+   * PostgreSQL DW table `clickstream_events` contains new rows
+
+---
+
 # 🏗️ Architecture Summary
 
 ## 1. User-Facing Domain
@@ -281,6 +511,12 @@ The analytics environment uses **two EC2 instances**, each with a dedicated role
   * Product engagement
   * Time-based activity trends
 
+#### Admin Access (AWS Systems Manager)
+
+* DW/Shiny EC2 runs the SSM Agent; no public IP or inbound SSH is exposed.
+* An **SSM Interface VPC Endpoint** in the analytics subnet keeps Session Manager traffic inside the VPC.
+* Admins open Session Manager port-forward/tunnel sessions to reach PostgreSQL or the Shiny UI for maintenance.
+
 > OLTP and Analytics are fully separated, ensuring reporting queries do not impact transactional performance.
 
 ---
@@ -308,6 +544,7 @@ The analytics environment uses **two EC2 instances**, each with a dedicated role
 
     * EC2 Data Warehouse (PostgreSQL) - no public IP
     * EC2 R Shiny Server - no public IP
+    * SSM Interface Endpoint for Session Manager tunnels (no bastion/SSH exposure)
     * No direct internet access (no route to IGW)
     * Isolated from public internet for security
 
@@ -357,8 +594,9 @@ Private components (Data Warehouse, R Shiny, Lambda ETL) reach S3 exclusively th
 
   * Inbound:
 
-    * `5432/tcp` – from Lambda ETL SG and Shiny SG
-  * Outbound: default (all allowed)
+    * `5432/tcp` from Lambda ETL SG and Shiny SG
+  * Outbound: default (all allowed); outbound `443/tcp` permitted to SSM interface endpoints
+  * Admin access uses Session Manager over the SSM interface endpoint (no inbound SSH)
 
 * **SG-Shiny**
 
@@ -400,7 +638,11 @@ Several AWS managed services operate outside the customer VPC and interact with 
   * Invokes Lambda ETL (VPC-enabled in Private Subnet 2)
   * No direct VPC interaction
 
-> **Note**: Only Lambda ETL is VPC-enabled to access the Data Warehouse in the private subnet.  
+* **AWS Systems Manager (Session Manager)**
+  * Regional control plane; Session Manager traffic to DW/Shiny stays private via VPC Interface Endpoints (SSM/SSMMessages/EC2Messages)
+  * Enables admin port forwarding/tunnels into the private EC2 for DW or Shiny maintenance without SSH
+
+> **Note**: Lambda ETL is VPC-enabled to access the Data Warehouse in the private subnet; Session Manager uses VPC interface endpoints for admin tunnels.  
 > Lambda Ingest operates outside the VPC for simpler configuration and lower latency when writing to S3.
 
 ---
@@ -417,6 +659,10 @@ Several AWS managed services operate outside the customer VPC and interact with 
   * Lambda Ingest & ETL logs
   * ETL execution metrics
   * VPC Flow Logs (optional, for network traffic analysis)
+* **Session Manager**:
+
+  * SSM Agent on DW/Shiny EC2 uses VPC interface endpoints
+  * Sessions can be port-forwarded to PostgreSQL/Shiny and audited via CloudWatch/S3
 
 ---
 
@@ -466,7 +712,7 @@ No additional “processed” bucket is required; all processed data is loaded d
    * Connects to DW via localhost/private IP
    * Reads processed analytics data
    * Renders interactive dashboards
-10. Admin accesses dashboards via secure/private access (VPN, bastion host, or AWS Systems Manager Session Manager)
+10. Admin opens an **AWS Systems Manager Session Manager** port-forward/tunnel through the SSM interface endpoint to reach PostgreSQL or the Shiny UI (no VPN/bastion/SSH required).
 
 ---
 
@@ -474,9 +720,10 @@ No additional “processed” bucket is required; all processed data is loaded d
 
 The numbered flow in the architecture diagram illustrates:
 - **(1)** User login via Cognito
-- **(2-5)** User browsing via CloudFront → Amplify → API Gateway → Lambda Ingest
+- **(2-5)** User browsing via CloudFront + Amplify + API Gateway + Lambda Ingest
 - **(6-8)** Amplify connecting to OLTP via Internet Gateway
-- **(9-13)** Batch ETL processing from S3 → Lambda ETL → Data Warehouse → R Shiny
+- **(9-12)** Batch ETL processing from S3 + Lambda ETL + Data Warehouse + R Shiny
+- **(13-15)** Session Manager interface endpoint and admin tunneling into the DW/Shiny EC2
 
 ---
 
@@ -489,6 +736,7 @@ The numbered flow in the architecture diagram illustrates:
   * **OLTP** (online transaction processing)
   * **Analytics / Data Warehouse**
 * R Shiny-based visual analytics, fully private
+* Zero-SSH admin access via AWS Systems Manager Session Manager (VPC Interface Endpoint + port forwarding)
 * Cost-optimized:
 
   * No NAT Gateway
@@ -513,6 +761,7 @@ The numbered flow in the architecture diagram illustrates:
 * **Amazon VPC** — Network isolation (public & private subnets)
 * **AWS IAM** — Access control
 * **Amazon CloudWatch** — Logging & monitoring
+* **AWS Systems Manager (Session Manager + VPC Interface Endpoints)** — Admin tunneling/port forwarding into private EC2
 
 ### Databases
 
@@ -523,3 +772,5 @@ The numbered flow in the architecture diagram illustrates:
 
 * **R Shiny Server** — Analytics dashboards
 * **Custom ETL logic** — Lambda ETL transforming S3 JSON → SQL tables
+
+---
