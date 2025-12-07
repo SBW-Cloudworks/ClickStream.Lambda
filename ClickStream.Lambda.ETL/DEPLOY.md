@@ -23,7 +23,7 @@
    (không cần npm i khi runtime vì Lambda không có internet; `node_modules` sẽ đi kèm zip. Nếu muốn dùng layer, vẫn phải build local.)
 2) Tạo zip kèm mã nguồn + node_modules:
    ```powershell
-   Compress-Archive -Path index.mjs,package.json,package-lock.json,node_modules -DestinationPath lambda-etl.zip -Force
+   Copy-Item Lambda-ETL.mjs index.mjs; Compress-Archive -Path index.mjs,package.json,package-lock.json,node_modules -DestinationPath lambda-etl.zip -Force; Remove-Item index.mjs
    ```
 3) Upload zip lên Lambda (Console hoặc CLI):
    ```bash
