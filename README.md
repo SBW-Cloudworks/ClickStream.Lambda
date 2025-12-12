@@ -1,4 +1,6 @@
-﻿![SBWBanner](img/SBW_Banner.png)
+﻿![Node.js](https://img.shields.io/badge/Node.js-22.x-green) ![AWS Lambda](https://img.shields.io/badge/AWS%20Lambda-Enabled-orange) ![AWS S3](https://img.shields.io/badge/AWS%20S3-Enabled-blue) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Enabled-blue)
+
+![SBWBanner](img/SBW_Banner.png)
 ![Diagram](img/ClickStreamDiagramV11.png)
 # Clickstream Analytics Platform for E-Commerce
 
