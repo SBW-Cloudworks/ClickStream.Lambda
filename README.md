@@ -776,3 +776,10 @@ The numbered flow in the architecture diagram illustrates:
 * **Custom ETL logic** — Lambda ETL transforming S3 JSON → SQL tables
 
 ---
+## 👥 Contributors
+Thanks to all the amazing people who have contributed to this project! ✨
+<div align="center">
+   <a href="https://github.com/SBW-Cloudworks/ClickStream.Lambda/graphs/contributors">
+      <img src="https://contrib.rocks/image?repo=SBW-Cloudworks/ClickStream.Lambda" />
+   </a>
+</div>
